@@ -43,23 +43,25 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
 
-      # 6️⃣ Tag & Push to ECR using AWS Account ID
+      # 6️⃣ Tag & Push Docker image to ECR
       - name: Tag & Push Image
         run: |
-          # Get AWS Account ID
+          # Fetch AWS account ID dynamically
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+          
+          # Construct ECR image URI
+          IMAGE_URI="$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
 
-          # Construct full ECR image URI
-          IMAGE_URI=$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
-
-          # Tag and push Docker image
+          # Tag and push the image
           docker tag sudoku-app:${{ env.IMAGE_TAG }} $IMAGE_URI
           docker push $IMAGE_URI
 
+          # Print info for later steps
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+
       # 7️⃣ Output pushed image info
-      - name: Output pushed image URI and Account
+      - name: Output pushed image info
         run: |
-          echo "Docker image pushed: ${{ env.IMAGE_URI }}"
-          echo "AWS Account ID: ${{ env.AWS_ACCOUNT_ID }}"
+          echo "Docker image pushed: $IMAGE_URI"
+          echo "AWS Account ID: $AWS_ACCOUNT_ID"
