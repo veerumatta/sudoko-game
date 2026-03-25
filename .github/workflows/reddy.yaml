@@ -1,0 +1,68 @@
+name: 🚀 Build & Push Docker to ECR
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2️⃣ SonarQube Scan
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v2
+        with:
+          args: >
+            -Dsonar.projectKey=sudoku-app
+            -Dsonar.sources=.
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      # 3️⃣ Configure AWS credentials
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # 4️⃣ Login to ECR
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 5️⃣ Build Docker image
+      - name: Build Docker Image
+        run: |
+          IMAGE_TAG=$(date +%s)
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          docker build -t sudoku-app:$IMAGE_TAG .
+
+      # 6️⃣ Trivy security scan
+      - name: Scan Image with Trivy
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: sudoku-app:${{ env.IMAGE_TAG }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+      # 7️⃣ Tag & Push to ECR
+      - name: Tag & Push Image
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_URI=$ACCOUNT_ID.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+          docker tag sudoku-app:${{ env.IMAGE_TAG }} $IMAGE_URI
+          docker push $IMAGE_URI
+
+      - name: Output pushed image URI
+        run: echo "Docker image pushed: ${{ env.IMAGE_URI }}"
