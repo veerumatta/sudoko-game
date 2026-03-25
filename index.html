@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudoku Master Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+</head>
+<body>
+
+    <div id="welcome-screen" class="screen">
+        <div class="welcome-card">
+            <div class="logo-badge">PREMIUM</div>
+            <h1>Sudoku Master</h1>
+            <p>Train your brain. Master your logic.</p>
+            <button class="play-main-btn" onclick="goToDifficulty()">Play Now</button>
+        </div>
+    </div>
+
+    <div id="difficulty-screen" class="screen" style="display: none;">
+        <div class="selection-card">
+            <button class="back-link" onclick="showMenu()">← Back to Menu</button>
+            <h2>Select Level</h2>
+            <div class="level-select">
+                <button class="level-btn easy" onclick="showGame('easy')">
+                    <span>Easy</span>
+                    <small>For beginners</small>
+                </button>
+                <button class="level-btn medium" onclick="showGame('medium')">
+                    <span>Medium</span>
+                    <small>For thinkers</small>
+                </button>
+                <button class="level-btn hard" onclick="showGame('hard')">
+                    <span>Hard</span>
+                    <small>For experts</small>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="game-screen" class="screen" style="display: none;">
+        <div class="container">
+            <div class="game-header">
+                <button class="back-btn" onclick="goToDifficulty()">← Exit</button>
+                <div class="timer-box"><span id="timer">00:00</span></div>
+                <div class="diff-badge" id="diff-label">EASY</div>
+            </div>
+
+            <div id="grid" class="grid"></div>
+
+            <div class="keypad">
+                <button onclick="inputNumber(1)">1</button>
+                <button onclick="inputNumber(2)">2</button>
+                <button onclick="inputNumber(3)">3</button>
+                <button onclick="inputNumber(4)">4</button>
+                <button onclick="inputNumber(5)">5</button>
+                <button onclick="inputNumber(6)">6</button>
+                <button onclick="inputNumber(7)">7</button>
+                <button onclick="inputNumber(8)">8</button>
+                <button onclick="inputNumber(9)">9</button>
+                <button class="erase-btn" onclick="inputNumber(0)">⌫</button>
+            </div>
+
+            <div class="controls">
+                <button class="secondary-btn" onclick="startNewGame()">New Puzzle</button>
+                <button class="primary-btn" onclick="checkWin()">Check Win</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
