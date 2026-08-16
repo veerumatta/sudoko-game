@@ -106,7 +106,6 @@ jobs:
             -o snyk
 
           chmod +x snyk
-
           sudo mv snyk /usr/local/bin/snyk
 
       - name: Check Snyk version
@@ -303,10 +302,6 @@ jobs:
 
           echo "Repository synchronized."
 
-
-      # --------------------------------------------------------
-      # Update Docker image in Kubernetes
-      # --------------------------------------------------------
       - name: Update Kubernetes image
         run: |
           set -e
@@ -324,10 +319,6 @@ jobs:
             "s|^[[:space:]]*image:.*|        image: ${NEW_IMAGE}|" \
             k8s/deployment.yaml
 
-
-      # --------------------------------------------------------
-      # Display updated manifest
-      # --------------------------------------------------------
       - name: Show updated deployment
         run: |
           echo "=========================================="
@@ -336,10 +327,6 @@ jobs:
 
           cat k8s/deployment.yaml
 
-
-      # --------------------------------------------------------
-      # Commit manifest
-      # --------------------------------------------------------
       - name: Commit Kubernetes change
         run: |
           set -e
@@ -355,10 +342,6 @@ jobs:
             echo "Kubernetes manifest committed."
           fi
 
-
-      # --------------------------------------------------------
-      # Push manifest
-      # --------------------------------------------------------
       - name: Push Kubernetes change
         run: |
           set -e
@@ -371,21 +354,69 @@ jobs:
 
 
   # ============================================================
-  # 8. ARGO CD GITOPS
+  # 8. ARGO CD GITOPS DEPLOYMENT
   # ============================================================
   argocd:
     name: Argo CD GitOps Deployment
-    runs-on: ubuntu-latest
+
+    # IMPORTANT:
+    # This job must run on your EC2 self-hosted runner.
+    # The runner has access to Minikube and ~/.kube/config.
+    runs-on: self-hosted
 
     needs: update-manifest
 
     steps:
 
+      # --------------------------------------------------------
+      # Checkout repository
+      # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+          ref: main
 
+      # --------------------------------------------------------
+      # Verify Kubernetes access
+      # --------------------------------------------------------
+      - name: Verify Kubernetes access
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Checking Kubernetes access"
+          echo "=========================================="
+
+          echo "Current Kubernetes context:"
+          kubectl config current-context
+
+          echo ""
+          echo "Kubernetes nodes:"
+          kubectl get nodes
+
+          echo ""
+          echo "Kubernetes access successful."
+
+      # --------------------------------------------------------
+      # Verify Argo CD
+      # --------------------------------------------------------
+      - name: Verify Argo CD
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Checking Argo CD"
+          echo "=========================================="
+
+          kubectl get pods -n argocd
+
+          echo ""
+          echo "Argo CD is available."
+
+      # --------------------------------------------------------
+      # Verify Kubernetes manifest
+      # --------------------------------------------------------
       - name: Verify Kubernetes manifest
         run: |
           set -e
@@ -395,37 +426,129 @@ jobs:
           echo "=========================================="
 
           test -f k8s/deployment.yaml
+          test -f k8s/service.yaml
+          test -f k8s/namespace.yaml
 
+          echo ""
+          echo "Docker image in deployment:"
           grep -n "image:" k8s/deployment.yaml
 
           echo ""
           echo "Kubernetes manifest verified."
 
-
-      - name: Verify Argo CD application manifest
+      # --------------------------------------------------------
+      # Verify Argo CD Application manifest
+      # --------------------------------------------------------
+      - name: Verify Argo CD Application manifest
         run: |
           set -e
 
           echo "=========================================="
-          echo "Verifying Argo CD configuration"
+          echo "Verifying Argo CD Application"
           echo "=========================================="
 
           test -f argocd/application.yaml
 
+          echo ""
+          echo "Application manifest:"
           cat argocd/application.yaml
 
           echo ""
-          echo "Argo CD application manifest verified."
+          echo "Argo CD Application manifest verified."
 
+      # --------------------------------------------------------
+      # Create / Update Argo CD Application
+      # --------------------------------------------------------
+      - name: Apply Argo CD Application
+        run: |
+          set -e
 
-      - name: GitOps deployment information
+          echo "=========================================="
+          echo "Creating / Updating Argo CD Application"
+          echo "=========================================="
+
+          kubectl apply -f argocd/application.yaml
+
+          echo ""
+          echo "Argo CD Application applied successfully."
+
+      # --------------------------------------------------------
+      # Show Application
+      # --------------------------------------------------------
+      - name: Check Argo CD Application
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Argo CD Application"
+          echo "=========================================="
+
+          kubectl get application sudoku -n argocd
+
+      # --------------------------------------------------------
+      # Wait for Argo CD synchronization
+      # --------------------------------------------------------
+      - name: Wait for Argo CD Sync and Health
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Waiting for Argo CD"
+          echo "=========================================="
+
+          for i in {1..60}; do
+
+            SYNC_STATUS=$(kubectl get application sudoku \
+              -n argocd \
+              -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+
+            HEALTH_STATUS=$(kubectl get application sudoku \
+              -n argocd \
+              -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+
+            echo "Attempt $i/60"
+            echo "Sync Status: ${SYNC_STATUS:-Unknown}"
+            echo "Health Status: ${HEALTH_STATUS:-Unknown}"
+            echo ""
+
+            if [ "$SYNC_STATUS" = "Synced" ] && \
+               [ "$HEALTH_STATUS" = "Healthy" ]; then
+
+              echo "=========================================="
+              echo "Argo CD deployment successful!"
+              echo "=========================================="
+
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "=========================================="
+          echo "Argo CD deployment timeout"
+          echo "=========================================="
+
+          echo ""
+          echo "Application status:"
+          kubectl get application sudoku -n argocd -o yaml
+
+          echo ""
+          echo "Kubernetes resources:"
+          kubectl get all -n sudoku || true
+
+          exit 1
+
+      # --------------------------------------------------------
+      # Final deployment status
+      # --------------------------------------------------------
+      - name: Final deployment status
         run: |
           echo ""
           echo "=============================================="
           echo "       SUDOKO DEVSECOPS PIPELINE"
           echo "=============================================="
           echo ""
-          echo "Application: sudoko-game"
+          echo "Application: sudoku"
           echo ""
           echo "Docker Image:"
           echo "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
@@ -437,9 +560,11 @@ jobs:
           echo "Manifest updated successfully."
           echo ""
           echo "Argo CD:"
-          echo "Argo CD will detect the Git change and synchronize"
-          echo "the application according to the Argo CD Application."
+          kubectl get application sudoku -n argocd
+          echo ""
+          echo "Kubernetes resources:"
+          kubectl get all -n sudoku
           echo ""
           echo "=============================================="
-          echo "       GITOPS UPDATE SUCCESSFUL"
+          echo "       GITOPS DEPLOYMENT SUCCESSFUL"
           echo "=============================================="
