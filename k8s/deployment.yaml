@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: sudoku
-          image: veeramattareddy/sudoku-game:latest
+        image: veeramattareddy/sudoko-game:94966f615aac83b932f3c2164c1b19b07046f520
           ports:
             - containerPort: 80
           resources:
