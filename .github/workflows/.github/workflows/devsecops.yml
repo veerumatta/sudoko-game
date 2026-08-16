@@ -7,227 +7,305 @@ on:
 
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/sudoku-game
+  APP_NAME: sudoko-game
 
 jobs:
 
-  # ==========================================
-  # 1. CODE QUALITY + SECURITY
-  # ==========================================
-
-  security:
-    name: SonarQube + Snyk
+  # ============================================================
+  # 1. BUILD / VALIDATE
+  # ============================================================
+  build:
+    name: Build Application
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      # --------------------------
-      # SonarQube
-      # --------------------------
+      - name: Validate project
+        run: |
+          test -f index.html
+          test -f script.js
+          test -f style.css
+          test -f Dockerfile
 
-      - name: SonarQube Scan
+          echo "Application validation successful."
+
+  # ============================================================
+  # 2. SONARQUBE
+  # ============================================================
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      # --------------------------
-      # Snyk
-      # --------------------------
+  # ============================================================
+  # 3. SNYK
+  # ============================================================
+  snyk:
+    name: Snyk Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
       - name: Install Snyk
         run: |
-          npm install -g snyk
+          curl --compressed \
+            https://static.snyk.io/cli/latest/snyk-linux \
+            -o snyk
 
-      - name: Snyk Scan
+          chmod +x snyk
+          sudo mv snyk /usr/local/bin/snyk
+
+      - name: Snyk version
+        run: snyk --version
+
+      - name: Snyk scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           snyk test \
-            --all-projects \
             --severity-threshold=high \
             || true
 
-
-  # ==========================================
-  # 2. DOCKER
-  # ==========================================
-
-  docker:
-    name: Docker Build + Trivy
+  # ============================================================
+  # 4. DOCKER BUILD
+  # ============================================================
+  docker-build:
+    name: Build Docker Image
     runs-on: ubuntu-latest
 
     needs:
-      - security
+      - sonarqube
+      - snyk
 
     steps:
-
-      - name: Checkout
+      - name: Checkout source code
         uses: actions/checkout@v4
 
-      # --------------------------
-      # Docker Login
-      # --------------------------
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest \
+            .
 
+      - name: Save Docker image
+        run: |
+          docker save \
+            ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
+            -o sudoko-game.tar
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: sudoko-docker-image
+          path: sudoko-game.tar
+
+  # ============================================================
+  # 5. TRIVY
+  # ============================================================
+  trivy:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+
+    needs: docker-build
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Build image for Trivy
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
+            .
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+  # ============================================================
+  # 6. PUSH TO BOTH DOCKER HUB + NEXUS
+  # ============================================================
+  push-images:
+    name: Push Image to Docker Hub and Nexus
+    runs-on: ubuntu-latest
+
+    needs: trivy
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Docker Hub Login
+      # --------------------------------------------------------
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # --------------------------
-      # Build
-      # --------------------------
+      # --------------------------------------------------------
+      # Nexus Login
+      # --------------------------------------------------------
+      - name: Login to Nexus
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.NEXUS_URL }}
+          username: ${{ secrets.NEXUS_USERNAME }}
+          password: ${{ secrets.NEXUS_PASSWORD }}
 
-      - name: Build Docker Image
+      # --------------------------------------------------------
+      # Build image
+      # --------------------------------------------------------
+      - name: Build Docker image
         run: |
           docker build \
-            -t $IMAGE_NAME:${GITHUB_SHA::7} \
-            -t $IMAGE_NAME:latest \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest \
+            -t ${{ secrets.NEXUS_URL }}/sudoko-game:${{ github.sha }} \
+            -t ${{ secrets.NEXUS_URL }}/sudoko-game:latest \
             .
 
-      # --------------------------
-      # Install Trivy
-      # --------------------------
-
-      - name: Install Trivy
+      # --------------------------------------------------------
+      # Push Docker Hub
+      # --------------------------------------------------------
+      - name: Push to Docker Hub
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget gnupg
+          docker push \
+            ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
 
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
-            | sudo gpg --dearmor \
-            -o /usr/share/keyrings/trivy.gpg
+          docker push \
+            ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest
 
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] \
-            https://aquasecurity.github.io/trivy-repo/deb \
-            generic main" \
-            | sudo tee /etc/apt/sources.list.d/trivy.list
-
-          sudo apt-get update
-          sudo apt-get install -y trivy
-
-      # --------------------------
-      # Trivy
-      # --------------------------
-
-      - name: Trivy Image Scan
+      # --------------------------------------------------------
+      # Push Nexus
+      # --------------------------------------------------------
+      - name: Push to Nexus
         run: |
-          trivy image \
-            --severity HIGH,CRITICAL \
-            --ignore-unfixed \
-            $IMAGE_NAME:${GITHUB_SHA::7}
+          docker push \
+            ${{ secrets.NEXUS_URL }}/sudoko-game:${{ github.sha }}
 
-      # --------------------------
-      # Push
-      # --------------------------
+          docker push \
+            ${{ secrets.NEXUS_URL }}/sudoko-game:latest
 
-      - name: Push Docker Image
+      - name: Images pushed successfully
         run: |
-          docker push $IMAGE_NAME:${GITHUB_SHA::7}
-          docker push $IMAGE_NAME:latest
+          echo "Docker Hub:"
+          echo "${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}"
 
+          echo "Nexus:"
+          echo "${{ secrets.NEXUS_URL }}/sudoko-game:${{ github.sha }}"
 
-  # ==========================================
-  # 3. UPDATE GITOPS MANIFEST
-  # ==========================================
-
+  # ============================================================
+  # 7. UPDATE KUBERNETES MANIFEST
+  # ============================================================
   update-manifest:
     name: Update Kubernetes Manifest
     runs-on: ubuntu-latest
 
-    needs:
-      - docker
+    needs: push-images
+
+    permissions:
+      contents: write
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Update Image
+      - name: Update Kubernetes image
         run: |
           sed -i \
-          "s|image:.*|image: $IMAGE_NAME:${GITHUB_SHA::7}|" \
-          k8s/deployment.yaml
+            "s|image:.*|image: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}|" \
+            k8s/deployment.yaml
 
-      - name: Show Manifest
+      - name: Show deployment
         run: |
           cat k8s/deployment.yaml
 
-      - name: Commit Kubernetes Manifest
+      - name: Commit deployment change
         run: |
-
-          git config user.name "github-actions[bot]"
-
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
 
           git add k8s/deployment.yaml
 
-          git diff --cached --quiet || \
-            git commit \
-            -m "chore: update sudoku image ${GITHUB_SHA::7}"
+          git commit \
+            -m "Update Sudoku image to ${{ github.sha }}" \
+            || echo "No changes"
 
           git push
 
-
-  # ==========================================
-  # 4. ARGO CD
-  # ==========================================
-
+  # ============================================================
+  # 8. ARGO CD
+  # ============================================================
   argocd:
-    name: Argo CD Deployment
+    name: Deploy using Argo CD
     runs-on: ubuntu-latest
 
-    needs:
-      - update-manifest
+    needs: update-manifest
 
     steps:
-
       - name: Install Argo CD CLI
         run: |
-
           curl -sSL \
             -o argocd \
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
 
-          sudo install \
-            -m 555 \
-            argocd \
-            /usr/local/bin/argocd
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/argocd
 
-      - name: Login Argo CD
-        env:
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+      - name: Argo CD version
         run: |
+          argocd version --client
 
-          argocd login \
-            "${{ secrets.ARGOCD_SERVER }}" \
-            --auth-token "$ARGOCD_AUTH_TOKEN" \
+      - name: Login to Argo CD
+        run: |
+          argocd login "${{ secrets.ARGOCD_SERVER }}" \
+            --auth-token "${{ secrets.ARGOCD_AUTH_TOKEN }}" \
             --grpc-web \
             --insecure
 
-      - name: Sync Sudoku
+      - name: Sync application
         run: |
+          argocd app sync sudoko-game \
+            --grpc-web
 
-          argocd app sync sudoku
-
-      - name: Wait for Healthy
+      - name: Wait for deployment
         run: |
-
-          argocd app wait sudoku \
+          argocd app wait sudoko-game \
             --sync \
             --health \
-            --timeout 300
+            --timeout 300 \
+            --grpc-web
 
-      - name: Application Status
+      - name: Deployment successful
         run: |
+          echo "======================================"
+          echo "       DEPLOYMENT SUCCESSFUL"
+          echo "======================================"
 
-          argocd app get sudoku
+          argocd app get sudoko-game --grpc-web
