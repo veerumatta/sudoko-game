@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: sudoku
-        image: docker.io/veeramattareddy/sudoko-game:4be7e0fa302b9ad6300e45932b1a570f7d7497e1
+        image: docker.io/veeramattareddy/sudoko-game:f08ea09f35cf5774dc130c134cea0a4846fe2390
           ports:
             - containerPort: 80
           resources:
