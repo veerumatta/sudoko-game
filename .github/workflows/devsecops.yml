@@ -1,3 +1,4 @@
+
 name: Sudoku DevSecOps CI/CD
 
 on:
@@ -37,6 +38,12 @@ jobs:
           test -f style.css
           test -f Dockerfile
 
+          test -f k8s/deployment.yaml
+          test -f k8s/service.yaml
+          test -f k8s/namespace.yaml
+
+          test -f argocd/application.yaml
+
           echo "Application validation successful."
 
 
@@ -46,6 +53,7 @@ jobs:
   sonarqube:
     name: SonarQube Analysis
     runs-on: ubuntu-latest
+
     needs: build
 
     steps:
@@ -73,6 +81,7 @@ jobs:
   snyk:
     name: Snyk Security Scan
     runs-on: ubuntu-latest
+
     needs: build
 
     steps:
@@ -99,6 +108,8 @@ jobs:
           snyk auth "$SNYK_TOKEN"
 
       - name: Run Snyk scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           snyk test \
             --severity-threshold=high \
@@ -132,33 +143,35 @@ jobs:
           docker images
 
 
- # ============================================================
-# 5. TRIVY IMAGE SECURITY SCAN
-# ============================================================
-trivy:
-  name: Trivy Security Scan
-  runs-on: ubuntu-latest
+  # ============================================================
+  # 5. TRIVY IMAGE SECURITY SCAN
+  # ============================================================
+  trivy:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
 
-  needs: docker-build
+    needs: docker-build
 
-  steps:
-    - name: Checkout source code
-      uses: actions/checkout@v4
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-    - name: Build image for Trivy
-      run: |
-        docker build \
-          -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
-          .
+      - name: Build image for Trivy
+        run: |
+          docker build \
+            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
+            .
 
-    - name: Run Trivy scan
-      uses: aquasecurity/trivy-action@0.28.0
-      with:
-        image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
-        format: table
-        severity: CRITICAL,HIGH
-        ignore-unfixed: true
-        exit-code: '1'
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+
   # ============================================================
   # 6. PUSH IMAGE TO DOCKER HUB + NEXUS
   # ============================================================
@@ -230,12 +243,14 @@ trivy:
           echo "======================================"
           echo "Docker Hub Image"
           echo "======================================"
+
           echo "${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}"
 
           echo ""
           echo "======================================"
           echo "Nexus Image"
           echo "======================================"
+
           echo "${{ secrets.NEXUS_URL }}/sudoko-game:${{ github.sha }}"
 
 
@@ -277,16 +292,19 @@ trivy:
 
       - name: Configure Git
         run: |
-          git config user.name "github-actions"
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit Kubernetes change
         run: |
           git add k8s/deployment.yaml
 
-          git diff --cached --quiet || \
+          if git diff --cached --quiet; then
+            echo "No deployment changes."
+          else
             git commit \
-            -m "Update Sudoku image to ${{ github.sha }} [skip ci]"
+              -m "Update Sudoku image to ${{ github.sha }} [skip ci]"
+          fi
 
       - name: Push Kubernetes change
         run: |
