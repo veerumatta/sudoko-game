@@ -3,25 +3,33 @@ kind: Deployment
 metadata:
   name: sudoku
   namespace: sudoku
+
 spec:
   replicas: 2
+
   selector:
     matchLabels:
       app: sudoku
+
   template:
     metadata:
       labels:
         app: sudoku
+
     spec:
       containers:
         - name: sudoku
-        image: docker.io/veeramattareddy/sudoko-game:d30d6b87a7f084ecc0223cb637aff7b8bf5c1956
+          image: docker.io/veeramattareddy/sudoko-game:d30d6b87a7f084ecc0223cb637aff7b8bf5c1956
+          imagePullPolicy: Always
+
           ports:
             - containerPort: 80
+
           resources:
             requests:
               cpu: 100m
               memory: 64Mi
+
             limits:
               cpu: 500m
               memory: 256Mi
