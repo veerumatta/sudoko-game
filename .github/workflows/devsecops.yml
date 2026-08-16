@@ -7,11 +7,18 @@ on:
 
   workflow_dispatch:
 
+# Prevent multiple workflow runs from modifying main
+# at the same time.
+concurrency:
+  group: sudoku-devsecops-main
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 env:
   APP_NAME: sudoko-game
+  DOCKER_IMAGE: veerumatta/sudoko-game
 
 jobs:
 
@@ -23,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
 
@@ -30,7 +38,9 @@ jobs:
         run: |
           set -e
 
+          echo "======================================"
           echo "Checking application files..."
+          echo "======================================"
 
           test -f index.html
           test -f script.js
@@ -56,6 +66,7 @@ jobs:
     needs: build
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
@@ -84,16 +95,20 @@ jobs:
     needs: build
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Install Snyk
         run: |
+          set -e
+
           curl --compressed \
             https://static.snyk.io/cli/latest/snyk-linux \
             -o snyk
 
           chmod +x snyk
+
           sudo mv snyk /usr/local/bin/snyk
 
       - name: Check Snyk version
@@ -125,14 +140,17 @@ jobs:
       - snyk
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Build Docker image
         run: |
+          set -e
+
           docker build \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest \
+            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
+            -t ${{ env.DOCKER_IMAGE }}:latest \
             .
 
       - name: Show Docker images
@@ -150,19 +168,22 @@ jobs:
     needs: docker-build
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Build image for Trivy
         run: |
+          set -e
+
           docker build \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
+            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
             .
 
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
+          image-ref: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -179,6 +200,7 @@ jobs:
     needs: trivy
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v4
 
@@ -196,18 +218,20 @@ jobs:
       # --------------------------------------------------------
       - name: Build Docker image
         run: |
+          set -e
+
           docker build \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }} \
-            -t ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest \
+            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
+            -t ${{ env.DOCKER_IMAGE }}:latest \
             .
 
       # --------------------------------------------------------
-      # Push image with commit SHA
+      # Push SHA image
       # --------------------------------------------------------
       - name: Push SHA image to Docker Hub
         run: |
           docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
 
       # --------------------------------------------------------
       # Push latest image
@@ -215,7 +239,7 @@ jobs:
       - name: Push latest image to Docker Hub
         run: |
           docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest
+            ${{ env.DOCKER_IMAGE }}:latest
 
       # --------------------------------------------------------
       # Display image information
@@ -226,8 +250,8 @@ jobs:
           echo "Docker Hub Image"
           echo "======================================"
 
-          echo "${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}"
-          echo "${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:latest"
+          echo "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+          echo "${{ env.DOCKER_IMAGE }}:latest"
 
 
   # ============================================================
@@ -243,21 +267,58 @@ jobs:
       contents: write
 
     steps:
+
+      # --------------------------------------------------------
+      # Checkout main branch
+      # --------------------------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: main
 
+      # --------------------------------------------------------
+      # Configure Git
+      # --------------------------------------------------------
+      - name: Configure Git
+        run: |
+          git config user.name "veerumatta"
+          git config user.email "veeruveerareddy9@gmail.com"
+
+      # --------------------------------------------------------
+      # Synchronize with latest main
+      # --------------------------------------------------------
+      - name: Synchronize with latest main
+        run: |
+          set -e
+
+          git fetch origin main
+
+          git checkout main
+
+          git reset --hard origin/main
+
+          echo "Current commit:"
+          git log -1 --oneline
+
+      # --------------------------------------------------------
+      # Update Kubernetes image
+      # --------------------------------------------------------
       - name: Update Kubernetes image
         run: |
           set -e
 
+          echo "======================================"
           echo "Updating Kubernetes deployment..."
+          echo "======================================"
 
           sed -i \
-            "s|^[[:space:]]*image:.*|        image: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}|" \
+            "s|^[[:space:]]*image:.*|        image: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}|" \
             k8s/deployment.yaml
 
+      # --------------------------------------------------------
+      # Show updated deployment
+      # --------------------------------------------------------
       - name: Show updated deployment
         run: |
           echo "======================================"
@@ -266,13 +327,13 @@ jobs:
 
           cat k8s/deployment.yaml
 
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
+      # --------------------------------------------------------
+      # Commit Kubernetes change
+      # --------------------------------------------------------
       - name: Commit Kubernetes change
         run: |
+          set -e
+
           git add k8s/deployment.yaml
 
           if git diff --cached --quiet; then
@@ -282,9 +343,36 @@ jobs:
               -m "Update Sudoku image to ${{ github.sha }} [skip ci]"
           fi
 
+      # --------------------------------------------------------
+      # Push Kubernetes change
+      # --------------------------------------------------------
       - name: Push Kubernetes change
         run: |
-          git push origin HEAD:main
+          set -e
+
+          for attempt in 1 2 3; do
+
+            echo "======================================"
+            echo "Push attempt: $attempt"
+            echo "======================================"
+
+            if git push origin main; then
+              echo "Kubernetes manifest pushed successfully."
+              exit 0
+            fi
+
+            echo "Push rejected."
+            echo "Synchronizing with latest remote main..."
+
+            git fetch origin main
+
+            git rebase origin/main
+
+          done
+
+          echo "Failed to push Kubernetes manifest after 3 attempts."
+
+          exit 1
 
 
   # ============================================================
@@ -303,6 +391,8 @@ jobs:
       # --------------------------------------------------------
       - name: Install Argo CD CLI
         run: |
+          set -e
+
           curl -sSL \
             -o argocd \
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
@@ -319,6 +409,36 @@ jobs:
           argocd version --client
 
       # --------------------------------------------------------
+      # Validate Argo CD server
+      # --------------------------------------------------------
+      - name: Check Argo CD server
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+        run: |
+          set -e
+
+          echo "Checking Argo CD server configuration..."
+
+          if [[ -z "$ARGOCD_SERVER" ]]; then
+            echo "ERROR: ARGOCD_SERVER secret is empty."
+            exit 1
+          fi
+
+          if [[ "$ARGOCD_SERVER" == *"localhost"* ]]; then
+            echo "ERROR: ARGOCD_SERVER cannot use localhost."
+            exit 1
+          fi
+
+          if [[ "$ARGOCD_SERVER" == *"//"* ]]; then
+            echo "ERROR: ARGOCD_SERVER must be HOST:PORT."
+            echo "Example: 18.145.229.8:31102"
+            exit 1
+          fi
+
+          echo "Argo CD server configuration is valid."
+
+
+      # --------------------------------------------------------
       # Login to Argo CD
       # --------------------------------------------------------
       - name: Login to Argo CD
@@ -326,10 +446,13 @@ jobs:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
         run: |
+          set -e
+
           argocd login "$ARGOCD_SERVER" \
             --auth-token "$ARGOCD_AUTH_TOKEN" \
             --grpc-web \
             --insecure
+
 
       # --------------------------------------------------------
       # Check Argo CD application
@@ -339,6 +462,7 @@ jobs:
           argocd app get sudoko-game \
             --grpc-web
 
+
       # --------------------------------------------------------
       # Sync application
       # --------------------------------------------------------
@@ -347,8 +471,9 @@ jobs:
           argocd app sync sudoko-game \
             --grpc-web
 
+
       # --------------------------------------------------------
-      # Wait for deployment
+      # Wait for application health
       # --------------------------------------------------------
       - name: Wait for application health
         run: |
@@ -358,6 +483,7 @@ jobs:
             --timeout 300 \
             --grpc-web
 
+
       # --------------------------------------------------------
       # Final deployment information
       # --------------------------------------------------------
@@ -366,6 +492,17 @@ jobs:
           echo "=============================================="
           echo "       SUDOKO DEPLOYMENT SUCCESSFUL"
           echo "=============================================="
+
+          echo ""
+          echo "Docker Image:"
+          echo "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+
+          echo ""
+          echo "Argo CD Application:"
+          echo "sudoko-game"
+
+          echo ""
+          echo "Deployment completed successfully."
 
           argocd app get sudoko-game \
             --grpc-web
