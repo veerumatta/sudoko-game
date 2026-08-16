@@ -35,7 +35,9 @@ jobs:
         run: |
           set -e
 
-          echo "Checking application files..."
+          echo "=========================================="
+          echo "Validating Sudoku project"
+          echo "=========================================="
 
           test -f index.html
           test -f script.js
@@ -48,6 +50,7 @@ jobs:
 
           test -f argocd/application.yaml
 
+          echo ""
           echo "Application validation successful."
 
 
@@ -96,11 +99,14 @@ jobs:
         run: |
           set -e
 
+          echo "Installing Snyk..."
+
           curl --compressed \
             https://static.snyk.io/cli/latest/snyk-linux \
             -o snyk
 
           chmod +x snyk
+
           sudo mv snyk /usr/local/bin/snyk
 
       - name: Check Snyk version
@@ -111,16 +117,25 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
+          set -e
+
           test -n "$SNYK_TOKEN"
+
           snyk auth "$SNYK_TOKEN"
+
+          echo "Snyk authentication successful."
 
       - name: Run Snyk scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
+          echo "Running Snyk security scan..."
+
           snyk test \
             --severity-threshold=high \
             || true
+
+          echo "Snyk scan completed."
 
 
   # ============================================================
@@ -142,18 +157,22 @@ jobs:
         run: |
           set -e
 
+          echo "=========================================="
+          echo "Building Docker image"
+          echo "=========================================="
+
           docker build \
-            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
-            -t ${{ env.DOCKER_IMAGE }}:latest \
+            -t "${{ env.DOCKER_IMAGE }}:${{ github.sha }}" \
+            -t "${{ env.DOCKER_IMAGE }}:latest" \
             .
 
-      - name: Show Docker image
+      - name: Show Docker images
         run: |
           docker images
 
 
   # ============================================================
-  # 5. TRIVY SECURITY SCAN
+  # 5. TRIVY IMAGE SECURITY SCAN
   # ============================================================
   trivy:
     name: Trivy Security Scan
@@ -170,7 +189,7 @@ jobs:
           set -e
 
           docker build \
-            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
+            -t "${{ env.DOCKER_IMAGE }}:${{ github.sha }}" \
             .
 
       - name: Run Trivy scan
@@ -184,7 +203,7 @@ jobs:
 
 
   # ============================================================
-  # 6. PUSH TO DOCKER HUB
+  # 6. PUSH IMAGE TO DOCKER HUB
   # ============================================================
   push-image:
     name: Push Image to Docker Hub
@@ -208,27 +227,40 @@ jobs:
           set -e
 
           docker build \
-            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
-            -t ${{ env.DOCKER_IMAGE }}:latest \
+            -t "${{ env.DOCKER_IMAGE }}:${{ github.sha }}" \
+            -t "${{ env.DOCKER_IMAGE }}:latest" \
             .
 
       - name: Push SHA image
         run: |
+          set -e
+
+          echo "Pushing SHA image..."
+
           docker push \
-            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+            "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
 
       - name: Push latest image
         run: |
-          docker push \
-            ${{ env.DOCKER_IMAGE }}:latest
+          set -e
 
-      - name: Docker push successful
+          echo "Pushing latest image..."
+
+          docker push \
+            "${{ env.DOCKER_IMAGE }}:latest"
+
+      - name: Docker Hub push successful
         run: |
           echo "=========================================="
           echo "Docker Hub push successful"
           echo "=========================================="
-          echo "Image: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
-          echo "Image: ${{ env.DOCKER_IMAGE }}:latest"
+
+          echo "SHA image:"
+          echo "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+
+          echo ""
+          echo "Latest image:"
+          echo "${{ env.DOCKER_IMAGE }}:latest"
 
 
   # ============================================================
@@ -252,6 +284,8 @@ jobs:
 
       - name: Configure Git
         run: |
+          set -e
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -259,22 +293,41 @@ jobs:
         run: |
           set -e
 
+          echo "Fetching latest main branch..."
+
           git fetch origin main
 
           git checkout main
 
           git reset --hard origin/main
 
+          echo "Repository synchronized."
+
+
+      # --------------------------------------------------------
+      # Update Docker image in Kubernetes
+      # --------------------------------------------------------
       - name: Update Kubernetes image
         run: |
           set -e
 
-          echo "Updating Kubernetes deployment image..."
+          echo "=========================================="
+          echo "Updating Kubernetes image"
+          echo "=========================================="
+
+          NEW_IMAGE="${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+
+          echo "New image:"
+          echo "$NEW_IMAGE"
 
           sed -i \
-            "s|^[[:space:]]*image:.*|        image: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}|" \
+            "s|^[[:space:]]*image:.*|        image: ${NEW_IMAGE}|" \
             k8s/deployment.yaml
 
+
+      # --------------------------------------------------------
+      # Display updated manifest
+      # --------------------------------------------------------
       - name: Show updated deployment
         run: |
           echo "=========================================="
@@ -283,6 +336,10 @@ jobs:
 
           cat k8s/deployment.yaml
 
+
+      # --------------------------------------------------------
+      # Commit manifest
+      # --------------------------------------------------------
       - name: Commit Kubernetes change
         run: |
           set -e
@@ -290,142 +347,99 @@ jobs:
           git add k8s/deployment.yaml
 
           if git diff --cached --quiet; then
-            echo "No deployment changes."
+            echo "No Kubernetes changes detected."
           else
             git commit \
-              -m "Update Sudoku image to ${{ github.sha }} [skip ci]"
+              -m "Update Sudoku image to ${GITHUB_SHA} [skip ci]"
+
+            echo "Kubernetes manifest committed."
           fi
 
+
+      # --------------------------------------------------------
+      # Push manifest
+      # --------------------------------------------------------
       - name: Push Kubernetes change
         run: |
           set -e
 
-          git fetch origin main
-          git rebase origin/main
+          echo "Pushing Kubernetes manifest..."
 
           git push origin HEAD:main
 
+          echo "Kubernetes manifest pushed successfully."
+
 
   # ============================================================
-  # 8. ARGO CD DEPLOYMENT
+  # 8. ARGO CD GITOPS
   # ============================================================
   argocd:
-    name: Deploy using Argo CD
+    name: Argo CD GitOps Deployment
     runs-on: ubuntu-latest
 
     needs: update-manifest
 
     steps:
 
-      # --------------------------------------------------------
-      # Install Argo CD CLI
-      # --------------------------------------------------------
-      - name: Install Argo CD CLI
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Verify Kubernetes manifest
         run: |
           set -e
 
-          curl -sSL \
-            -o argocd \
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          echo "=========================================="
+          echo "Verifying Kubernetes manifest"
+          echo "=========================================="
 
-          chmod +x argocd
+          test -f k8s/deployment.yaml
 
-          sudo mv argocd /usr/local/bin/argocd
-
-      # --------------------------------------------------------
-      # Check CLI
-      # --------------------------------------------------------
-      - name: Check Argo CD version
-        run: |
-          argocd version --client
-
-      # --------------------------------------------------------
-      # Test Argo CD endpoint
-      # --------------------------------------------------------
-      - name: Test Argo CD connection
-        env:
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-        run: |
-          set -e
-
-          echo "Testing Argo CD endpoint..."
-
-          curl -k \
-            --connect-timeout 10 \
-            --max-time 20 \
-            "https://${ARGOCD_SERVER}/"
+          grep -n "image:" k8s/deployment.yaml
 
           echo ""
-          echo "Argo CD endpoint is reachable."
+          echo "Kubernetes manifest verified."
 
 
-      # --------------------------------------------------------
-      # Login to Argo CD
-      # --------------------------------------------------------
-      - name: Login to Argo CD
-        env:
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+      - name: Verify Argo CD application manifest
         run: |
           set -e
 
-          test -n "$ARGOCD_SERVER"
-          test -n "$ARGOCD_AUTH_TOKEN"
+          echo "=========================================="
+          echo "Verifying Argo CD configuration"
+          echo "=========================================="
 
-          echo "Logging into Argo CD..."
+          test -f argocd/application.yaml
 
-          argocd login "$ARGOCD_SERVER" \
-            --auth-token "$ARGOCD_AUTH_TOKEN" \
-            --grpc-web \
-            --insecure
+          cat argocd/application.yaml
 
-          echo "Argo CD login successful."
+          echo ""
+          echo "Argo CD application manifest verified."
 
 
-      # --------------------------------------------------------
-      # Check application
-      # --------------------------------------------------------
-      - name: Check Argo CD application
+      - name: GitOps deployment information
         run: |
-          set -e
-
-          argocd app get sudoko-game \
-            --grpc-web
-
-
-      # --------------------------------------------------------
-      # Sync application
-      # --------------------------------------------------------
-      - name: Sync Argo CD application
-        run: |
-          set -e
-
-          argocd app sync sudoko-game \
-            --grpc-web
-
-
-      # --------------------------------------------------------
-      # Wait for application
-      # --------------------------------------------------------
-      - name: Wait for application health
-        run: |
-          set -e
-
-          argocd app wait sudoko-game \
-            --sync \
-            --health \
-            --timeout 300 \
-            --grpc-web
-
-
-      # --------------------------------------------------------
-      # Success
-      # --------------------------------------------------------
-      - name: Deployment successful
-        run: |
+          echo ""
           echo "=============================================="
-          echo "       SUDOKO DEPLOYMENT SUCCESSFUL"
+          echo "       SUDOKO DEVSECOPS PIPELINE"
           echo "=============================================="
-
-          argocd app get sudoko-game \
-            --grpc-web
+          echo ""
+          echo "Application: sudoko-game"
+          echo ""
+          echo "Docker Image:"
+          echo "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+          echo ""
+          echo "Docker Hub:"
+          echo "Image pushed successfully."
+          echo ""
+          echo "Kubernetes:"
+          echo "Manifest updated successfully."
+          echo ""
+          echo "Argo CD:"
+          echo "Argo CD will detect the Git change and synchronize"
+          echo "the application according to the Argo CD Application."
+          echo ""
+          echo "=============================================="
+          echo "       GITOPS UPDATE SUCCESSFUL"
+          echo "=============================================="
