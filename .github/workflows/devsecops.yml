@@ -16,7 +16,6 @@ permissions:
 
 env:
   APP_NAME: sudoko-game
-  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game
 
 jobs:
 
@@ -35,6 +34,10 @@ jobs:
         run: |
           set -e
 
+          echo "=============================================="
+          echo "Validating Sudoku project"
+          echo "=============================================="
+
           test -f index.html
           test -f script.js
           test -f style.css
@@ -43,6 +46,7 @@ jobs:
           test -f k8s/deployment.yaml
           test -f k8s/service.yaml
           test -f k8s/namespace.yaml
+
           test -f argocd/application.yaml
 
           echo "Application validation successful."
@@ -77,7 +81,7 @@ jobs:
 
 
   # ============================================================
-  # 3. SNYK
+  # 3. SNYK SECURITY SCAN
   # ============================================================
   snyk:
     name: Snyk Security Scan
@@ -91,6 +95,8 @@ jobs:
 
       - name: Install Snyk
         run: |
+          set -e
+
           curl --compressed \
             https://static.snyk.io/cli/latest/snyk-linux \
             -o snyk
@@ -98,7 +104,7 @@ jobs:
           chmod +x snyk
           sudo mv snyk /usr/local/bin/snyk
 
-      - name: Check Snyk
+      - name: Check Snyk version
         run: |
           snyk --version
 
@@ -106,10 +112,15 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
+          set -e
+
           test -n "$SNYK_TOKEN"
+
           snyk auth "$SNYK_TOKEN"
 
       - name: Run Snyk scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           snyk test \
             --severity-threshold=high \
@@ -131,20 +142,36 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Build Docker image
+      - name: Validate Docker Hub username
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
+          set -e
+
+          test -n "$DOCKERHUB_USERNAME"
+
+          echo "Docker Hub username configured."
+
+      - name: Build Docker image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -e
+
+          IMAGE="docker.io/${DOCKERHUB_USERNAME}/sudoko-game"
+
           docker build \
-            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
-            -t ${{ env.DOCKER_IMAGE }}:latest \
+            -t "${IMAGE}:${GITHUB_SHA}" \
+            -t "${IMAGE}:latest" \
             .
 
-      - name: Show image
+      - name: Show Docker images
         run: |
           docker images
 
 
   # ============================================================
-  # 5. TRIVY
+  # 5. TRIVY IMAGE SECURITY SCAN
   # ============================================================
   trivy:
     name: Trivy Security Scan
@@ -157,15 +184,21 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build image for Trivy
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
+          set -e
+
+          IMAGE="docker.io/${DOCKERHUB_USERNAME}/sudoko-game"
+
           docker build \
-            -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
+            -t "${IMAGE}:${GITHUB_SHA}" \
             .
 
       - name: Run Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          image-ref: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/sudoko-game:${{ github.sha }}
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -173,7 +206,7 @@ jobs:
 
 
   # ============================================================
-  # 6. DOCKER HUB
+  # 6. PUSH IMAGE TO DOCKER HUB
   # ============================================================
   push-image:
     name: Push Image to Docker Hub
@@ -185,6 +218,9 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # --------------------------------------------------------
+      # Docker Hub login
+      # --------------------------------------------------------
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -192,26 +228,76 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build Docker image
+      # --------------------------------------------------------
+      # Validate Docker Hub configuration
+      # --------------------------------------------------------
+      - name: Validate Docker Hub configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
+          set -e
+
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+
+          echo "Docker Hub credentials are configured."
+
+      # --------------------------------------------------------
+      # Build image
+      # --------------------------------------------------------
+      - name: Build Docker image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -e
+
+          IMAGE="docker.io/${DOCKERHUB_USERNAME}/sudoko-game"
+
           docker build \
-            -t docker.io/${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
-            -t docker.io/${{ env.DOCKER_IMAGE }}:latest \
+            -t "${IMAGE}:${GITHUB_SHA}" \
+            -t "${IMAGE}:latest" \
             .
 
+      # --------------------------------------------------------
+      # Push SHA image
+      # --------------------------------------------------------
       - name: Push SHA image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          docker push \
-            docker.io/${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          set -e
 
+          IMAGE="docker.io/${DOCKERHUB_USERNAME}/sudoko-game"
+
+          docker push "${IMAGE}:${GITHUB_SHA}"
+
+      # --------------------------------------------------------
+      # Push latest image
+      # --------------------------------------------------------
       - name: Push latest image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          docker push \
-            docker.io/${{ env.DOCKER_IMAGE }}:latest
+          set -e
 
+          IMAGE="docker.io/${DOCKERHUB_USERNAME}/sudoko-game"
+
+          docker push "${IMAGE}:latest"
+
+      # --------------------------------------------------------
+      # Success
+      # --------------------------------------------------------
       - name: Docker push successful
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          echo "Docker image pushed successfully."
+          echo "=============================================="
+          echo "Docker Hub push successful"
+          echo "=============================================="
+          echo "Image: docker.io/${DOCKERHUB_USERNAME}/sudoko-game"
+          echo "Tag: ${GITHUB_SHA}"
+          echo "Tag: latest"
 
 
   # ============================================================
@@ -238,42 +324,95 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Synchronize branch
-        run: |
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
-
-      - name: Update Kubernetes image
+      # --------------------------------------------------------
+      # Synchronize with remote main
+      # --------------------------------------------------------
+      - name: Synchronize with latest main
         run: |
           set -e
 
+          git fetch origin main
+
+          git checkout main
+
+          git reset --hard origin/main
+
+          echo "Repository synchronized with origin/main."
+
+      # --------------------------------------------------------
+      # Update Kubernetes image
+      # --------------------------------------------------------
+      - name: Update Kubernetes image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -e
+
+          IMAGE="docker.io/${DOCKERHUB_USERNAME}/sudoko-game:${GITHUB_SHA}"
+
+          echo "Updating Kubernetes deployment image..."
+
           sed -i \
-            "s|^[[:space:]]*image:.*|        image: docker.io/${{ env.DOCKER_IMAGE }}:${{ github.sha }}|" \
+            "s|^[[:space:]]*image:.*|        image: ${IMAGE}|" \
             k8s/deployment.yaml
 
-      - name: Show deployment
+      # --------------------------------------------------------
+      # Show updated manifest
+      # --------------------------------------------------------
+      - name: Show updated deployment
         run: |
+          echo "=============================================="
+          echo "Updated Kubernetes Deployment"
+          echo "=============================================="
+
           cat k8s/deployment.yaml
 
+      # --------------------------------------------------------
+      # Commit manifest
+      # --------------------------------------------------------
       - name: Commit Kubernetes change
         run: |
+          set -e
+
           git add k8s/deployment.yaml
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No Kubernetes manifest changes."
           else
             git commit \
-              -m "Update Sudoku image to ${{ github.sha }} [skip ci]"
+              -m "Update Sudoku image to ${GITHUB_SHA} [skip ci]"
           fi
 
+      # --------------------------------------------------------
+      # Push with retry protection
+      # --------------------------------------------------------
       - name: Push Kubernetes change
         run: |
+          set -e
+
+          if git diff HEAD^ HEAD --quiet 2>/dev/null; then
+            echo "No new commit to push."
+            exit 0
+          fi
+
+          git fetch origin main
+
+          git rebase origin/main
+
           git push origin HEAD:main
+
+      # --------------------------------------------------------
+      # Manifest update successful
+      # --------------------------------------------------------
+      - name: Manifest update successful
+        run: |
+          echo "=============================================="
+          echo "Kubernetes manifest updated successfully"
+          echo "=============================================="
 
 
   # ============================================================
-  # 8. ARGO CD
+  # 8. ARGO CD DEPLOYMENT
   # ============================================================
   argocd:
     name: Deploy using Argo CD
@@ -282,19 +421,32 @@ jobs:
     needs: update-manifest
 
     steps:
+
+      # --------------------------------------------------------
+      # Install Argo CD CLI
+      # --------------------------------------------------------
       - name: Install Argo CD CLI
         run: |
+          set -e
+
           curl -sSL \
             -o argocd \
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
 
           chmod +x argocd
+
           sudo mv argocd /usr/local/bin/argocd
 
+      # --------------------------------------------------------
+      # Check CLI
+      # --------------------------------------------------------
       - name: Check Argo CD version
         run: |
           argocd version --client
 
+      # --------------------------------------------------------
+      # Validate secrets
+      # --------------------------------------------------------
       - name: Validate Argo CD configuration
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
@@ -302,39 +454,93 @@ jobs:
         run: |
           set -e
 
-          test -n "$ARGOCD_SERVER"
-          test -n "$ARGOCD_AUTH_TOKEN"
+          if [ -z "$ARGOCD_SERVER" ]; then
+            echo "ERROR: ARGOCD_SERVER secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+            echo "ERROR: ARGOCD_AUTH_TOKEN secret is missing."
+            exit 1
+          fi
 
           if [[ "$ARGOCD_SERVER" == *"localhost"* ]]; then
-            echo "ARGOCD_SERVER must not use localhost."
+            echo "ERROR: ARGOCD_SERVER must not use localhost."
             exit 1
           fi
 
-          if [[ "$ARGOCD_SERVER" == *"//"* ]]; then
-            echo "ARGOCD_SERVER must be HOST:PORT."
+          if [[ "$ARGOCD_SERVER" == *"127.0.0.1"* ]]; then
+            echo "ERROR: ARGOCD_SERVER must not use 127.0.0.1."
             exit 1
           fi
 
+          if [[ "$ARGOCD_SERVER" == *"192.168.49."* ]]; then
+            echo "ERROR: ARGOCD_SERVER must not use the Minikube private IP."
+            exit 1
+          fi
+
+          if [[ "$ARGOCD_SERVER" == https://* ]] || [[ "$ARGOCD_SERVER" == http://* ]]; then
+            echo "ERROR: ARGOCD_SERVER must be HOST:PORT, not a URL."
+            exit 1
+          fi
+
+          echo "Argo CD configuration is valid."
+
+      # --------------------------------------------------------
+      # Test TCP connectivity
+      # --------------------------------------------------------
+      - name: Test Argo CD connectivity
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+        run: |
+          set -e
+
+          SERVER_HOST="${ARGOCD_SERVER%:*}"
+          SERVER_PORT="${ARGOCD_SERVER##*:}"
+
+          echo "Testing Argo CD connectivity..."
+
+          timeout 15 bash -c \
+            "</dev/tcp/${SERVER_HOST}/${SERVER_PORT}"
+
+          echo "Argo CD endpoint is reachable."
+
+      # --------------------------------------------------------
+      # Login
+      # --------------------------------------------------------
       - name: Login to Argo CD
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
         run: |
+          set -e
+
           argocd login "$ARGOCD_SERVER" \
             --auth-token "$ARGOCD_AUTH_TOKEN" \
             --grpc-web \
             --insecure
 
+          echo "Argo CD login successful."
+
+      # --------------------------------------------------------
+      # Check application
+      # --------------------------------------------------------
       - name: Check Argo CD application
         run: |
           argocd app get sudoko-game \
             --grpc-web
 
+      # --------------------------------------------------------
+      # Sync application
+      # --------------------------------------------------------
       - name: Sync Argo CD application
         run: |
           argocd app sync sudoko-game \
             --grpc-web
 
+      # --------------------------------------------------------
+      # Wait for deployment
+      # --------------------------------------------------------
       - name: Wait for application health
         run: |
           argocd app wait sudoko-game \
@@ -343,8 +549,14 @@ jobs:
             --timeout 300 \
             --grpc-web
 
+      # --------------------------------------------------------
+      # Final deployment information
+      # --------------------------------------------------------
       - name: Deployment successful
         run: |
           echo "=============================================="
-          echo "SUDOKO DEPLOYMENT SUCCESSFUL"
+          echo "       SUDOKO DEPLOYMENT SUCCESSFUL"
           echo "=============================================="
+
+          argocd app get sudoko-game \
+            --grpc-web
