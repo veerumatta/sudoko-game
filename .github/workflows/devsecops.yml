@@ -125,8 +125,6 @@ jobs:
           echo "Snyk authentication successful."
 
       - name: Run Snyk scan
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           echo "Running Snyk security scan..."
 
@@ -171,7 +169,7 @@ jobs:
 
 
   # ============================================================
-  # 5. TRIVY IMAGE SECURITY SCAN
+  # 5. TRIVY SECURITY SCAN
   # ============================================================
   trivy:
     name: Trivy Security Scan
@@ -292,16 +290,15 @@ jobs:
         run: |
           set -e
 
-          echo "Fetching latest main branch..."
-
           git fetch origin main
-
           git checkout main
-
           git reset --hard origin/main
 
           echo "Repository synchronized."
 
+      # --------------------------------------------------------
+      # Update image
+      # --------------------------------------------------------
       - name: Update Kubernetes image
         run: |
           set -e
@@ -316,9 +313,12 @@ jobs:
           echo "$NEW_IMAGE"
 
           sed -i \
-            "s|^[[:space:]]*image:.*|        image: ${NEW_IMAGE}|" \
+            "s|^[[:space:]]*image:.*|          image: ${NEW_IMAGE}|" \
             k8s/deployment.yaml
 
+      # --------------------------------------------------------
+      # Show deployment
+      # --------------------------------------------------------
       - name: Show updated deployment
         run: |
           echo "=========================================="
@@ -327,6 +327,38 @@ jobs:
 
           cat k8s/deployment.yaml
 
+      # --------------------------------------------------------
+      # Validate image line
+      # --------------------------------------------------------
+      - name: Validate deployment image
+        run: |
+          set -e
+
+          echo "Checking deployment image..."
+
+          grep -n "image:" k8s/deployment.yaml
+
+          echo ""
+          echo "Checking Kubernetes YAML syntax..."
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/namespace.yaml
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/deployment.yaml
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/service.yaml
+
+          echo ""
+          echo "Kubernetes manifests are valid."
+
+      # --------------------------------------------------------
+      # Commit
+      # --------------------------------------------------------
       - name: Commit Kubernetes change
         run: |
           set -e
@@ -342,11 +374,12 @@ jobs:
             echo "Kubernetes manifest committed."
           fi
 
+      # --------------------------------------------------------
+      # Push
+      # --------------------------------------------------------
       - name: Push Kubernetes change
         run: |
           set -e
-
-          echo "Pushing Kubernetes manifest..."
 
           git push origin HEAD:main
 
@@ -359,9 +392,6 @@ jobs:
   argocd:
     name: Argo CD GitOps Deployment
 
-    # IMPORTANT:
-    # This job must run on your EC2 self-hosted runner.
-    # The runner has access to Minikube and ~/.kube/config.
     runs-on: self-hosted
 
     needs: update-manifest
@@ -369,7 +399,7 @@ jobs:
     steps:
 
       # --------------------------------------------------------
-      # Checkout repository
+      # Checkout latest repository
       # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -378,7 +408,20 @@ jobs:
           ref: main
 
       # --------------------------------------------------------
-      # Verify Kubernetes access
+      # Make sure checkout is latest
+      # --------------------------------------------------------
+      - name: Synchronize repository
+        run: |
+          set -e
+
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          echo "Repository synchronized with latest main."
+
+      # --------------------------------------------------------
+      # Verify Kubernetes
       # --------------------------------------------------------
       - name: Verify Kubernetes access
         run: |
@@ -388,11 +431,9 @@ jobs:
           echo "Checking Kubernetes access"
           echo "=========================================="
 
-          echo "Current Kubernetes context:"
           kubectl config current-context
 
           echo ""
-          echo "Kubernetes nodes:"
           kubectl get nodes
 
           echo ""
@@ -415,14 +456,14 @@ jobs:
           echo "Argo CD is available."
 
       # --------------------------------------------------------
-      # Verify Kubernetes manifest
+      # Verify Kubernetes manifests
       # --------------------------------------------------------
-      - name: Verify Kubernetes manifest
+      - name: Verify Kubernetes manifests
         run: |
           set -e
 
           echo "=========================================="
-          echo "Verifying Kubernetes manifest"
+          echo "Verifying Kubernetes manifests"
           echo "=========================================="
 
           test -f k8s/deployment.yaml
@@ -430,16 +471,43 @@ jobs:
           test -f k8s/namespace.yaml
 
           echo ""
-          echo "Docker image in deployment:"
-          grep -n "image:" k8s/deployment.yaml
+          echo "Deployment:"
+          cat k8s/deployment.yaml
 
           echo ""
-          echo "Kubernetes manifest verified."
+          echo "Service:"
+          cat k8s/service.yaml
+
+          echo ""
+          echo "Namespace:"
+          cat k8s/namespace.yaml
+
+      # --------------------------------------------------------
+      # Validate Kubernetes manifests
+      # --------------------------------------------------------
+      - name: Validate Kubernetes manifests
+        run: |
+          set -e
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/namespace.yaml
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/deployment.yaml
+
+          kubectl apply \
+            --dry-run=client \
+            -f k8s/service.yaml
+
+          echo ""
+          echo "Kubernetes manifests are valid."
 
       # --------------------------------------------------------
       # Verify Argo CD Application manifest
       # --------------------------------------------------------
-      - name: Verify Argo CD Application manifest
+      - name: Verify Argo CD Application
         run: |
           set -e
 
@@ -449,12 +517,17 @@ jobs:
 
           test -f argocd/application.yaml
 
-          echo ""
-          echo "Application manifest:"
           cat argocd/application.yaml
 
           echo ""
-          echo "Argo CD Application manifest verified."
+          echo "Validating Argo CD Application..."
+
+          kubectl apply \
+            --dry-run=client \
+            -f argocd/application.yaml
+
+          echo ""
+          echo "Argo CD Application manifest is valid."
 
       # --------------------------------------------------------
       # Create / Update Argo CD Application
@@ -467,7 +540,8 @@ jobs:
           echo "Creating / Updating Argo CD Application"
           echo "=========================================="
 
-          kubectl apply -f argocd/application.yaml
+          kubectl apply \
+            -f argocd/application.yaml
 
           echo ""
           echo "Argo CD Application applied successfully."
@@ -486,25 +560,46 @@ jobs:
           kubectl get application sudoku -n argocd
 
       # --------------------------------------------------------
-      # Wait for Argo CD synchronization
+      # Show initial status
+      # --------------------------------------------------------
+      - name: Show Argo CD status
+        run: |
+          echo "=========================================="
+          echo "Argo CD Status"
+          echo "=========================================="
+
+          kubectl get application sudoku \
+            -n argocd \
+            -o wide
+
+          echo ""
+
+          kubectl get application sudoku \
+            -n argocd \
+            -o jsonpath='Sync: {.status.sync.status}{"\n"}Health: {.status.health.status}{"\n"}'
+
+      # --------------------------------------------------------
+      # Wait for Argo CD
       # --------------------------------------------------------
       - name: Wait for Argo CD Sync and Health
         run: |
           set -e
 
           echo "=========================================="
-          echo "Waiting for Argo CD"
+          echo "Waiting for Argo CD synchronization"
           echo "=========================================="
 
           for i in {1..60}; do
 
             SYNC_STATUS=$(kubectl get application sudoku \
               -n argocd \
-              -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+              -o jsonpath='{.status.sync.status}' \
+              2>/dev/null || true)
 
             HEALTH_STATUS=$(kubectl get application sudoku \
               -n argocd \
-              -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+              -o jsonpath='{.status.health.status}' \
+              2>/dev/null || true)
 
             echo "Attempt $i/60"
             echo "Sync Status: ${SYNC_STATUS:-Unknown}"
@@ -529,12 +624,23 @@ jobs:
           echo "=========================================="
 
           echo ""
-          echo "Application status:"
-          kubectl get application sudoku -n argocd -o yaml
+          echo "Application:"
+          kubectl get application sudoku \
+            -n argocd \
+            -o yaml
 
           echo ""
           echo "Kubernetes resources:"
-          kubectl get all -n sudoku || true
+          kubectl get all \
+            -n sudoku \
+            || true
+
+          echo ""
+          echo "Pods:"
+          kubectl get pods \
+            -n sudoku \
+            -o wide \
+            || true
 
           exit 1
 
@@ -543,27 +649,32 @@ jobs:
       # --------------------------------------------------------
       - name: Final deployment status
         run: |
+          set -e
+
           echo ""
           echo "=============================================="
           echo "       SUDOKO DEVSECOPS PIPELINE"
           echo "=============================================="
           echo ""
+
           echo "Application: sudoku"
+
           echo ""
           echo "Docker Image:"
           echo "${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
-          echo ""
-          echo "Docker Hub:"
-          echo "Image pushed successfully."
-          echo ""
-          echo "Kubernetes:"
-          echo "Manifest updated successfully."
+
           echo ""
           echo "Argo CD:"
           kubectl get application sudoku -n argocd
+
           echo ""
           echo "Kubernetes resources:"
           kubectl get all -n sudoku
+
+          echo ""
+          echo "Pods:"
+          kubectl get pods -n sudoku -o wide
+
           echo ""
           echo "=============================================="
           echo "       GITOPS DEPLOYMENT SUCCESSFUL"
